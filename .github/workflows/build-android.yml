@@ -63,6 +63,25 @@ jobs:
             flutter create --platforms=android .
           fi
 
+      - name: Upgrade Gradle
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          WRAPPER="$PROJECT_DIR/android/gradle/wrapper/gradle-wrapper.properties"
+
+          if [[ ! -f "$WRAPPER" ]]; then
+            echo "::error::Không tìm thấy gradle-wrapper.properties"
+            exit 1
+          fi
+
+          sed -i -E \
+            's/(gradle-)[0-9][^/]*(-all|-bin)\.zip/\19.3.1\2.zip/' \
+            "$WRAPPER"
+
+          echo "Gradle wrapper sau khi cập nhật:"
+          grep "distributionUrl" "$WRAPPER"
+
       - name: Install dependencies
         run: |
           cd "$PROJECT_DIR"
