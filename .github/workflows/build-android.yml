@@ -1,5 +1,6 @@
 
-name: Our Days V4.8 APK 
+name: Our Days V4.8 APK - Fixed Toolchain
+
 on:
   workflow_dispatch:
 
@@ -35,9 +36,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          ARCHIVE="$(find "$GITHUB_WORKSPACE" -type f -name 'our-days-native-v4.8-phone-build.zip' -print -quit)"
+          ARCHIVE="$(find "$GITHUB_WORKSPACE" -type f \
+            -name 'our-days-native-v4.8-phone-build.zip' -print -quit)"
+
           if [[ -z "$ARCHIVE" ]]; then
-            echo "::error::Không tìm thấy our-days-native-v4.8-phone-build.zip"
+            echo "::error::Không tìm thấy ZIP nguồn Our Days V4.8."
             find "$GITHUB_WORKSPACE" -type f -name '*.zip' || true
             exit 1
           fi
@@ -45,19 +48,23 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/source"
           unzip -oq "$ARCHIVE" -d "$GITHUB_WORKSPACE/source"
 
-          PUBSPEC="$(find "$GITHUB_WORKSPACE/source" -type f -name pubspec.yaml -print -quit)"
+          PUBSPEC="$(find "$GITHUB_WORKSPACE/source" \
+            -type f -name pubspec.yaml -print -quit)"
+
           if [[ -z "$PUBSPEC" ]]; then
             echo "::error::ZIP không chứa pubspec.yaml."
             exit 1
           fi
 
           PROJECT_DIR="$(dirname "$PUBSPEC")"
+
           if [[ ! -f "$PROJECT_DIR/lib/main.dart" ]]; then
             echo "::error::Không tìm thấy lib/main.dart."
             exit 1
           fi
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Flutter project: $PROJECT_DIR"
 
       - name: Generate Android platform files
         shell: bash
@@ -66,19 +73,20 @@ jobs:
           cd "$PROJECT_DIR"
 
           if [[ ! -f scripts/bootstrap-platforms.sh ]]; then
-            echo "::error::Thiếu scripts/bootstrap-platforms.sh"
+            echo "::error::Thiếu scripts/bootstrap-platforms.sh."
             exit 1
           fi
 
           chmod +x scripts/bootstrap-platforms.sh
           bash scripts/bootstrap-platforms.sh
 
-      - name: Align Android Gradle Plugin, Kotlin and Gradle
+      - name: Fix Android Gradle toolchain
         shell: bash
         run: |
           set -euo pipefail
 
-          python3 - "$PROJECT_DIR/android/settings.gradle.kts" "$PROJECT_DIR/android/gradle/wrapper/gradle-wrapper.properties" <<'PY'
+          python3 - "$PROJECT_DIR/android/settings.gradle.kts" \
+            "$PROJECT_DIR/android/gradle/wrapper/gradle-wrapper.properties" <<'PY'
           from pathlib import Path
           import sys
 
@@ -86,62 +94,87 @@ jobs:
           wrapper_path = Path(sys.argv[2])
 
           if not settings_path.is_file():
-              raise SystemExit(f"Không tìm thấy: {settings_path}")
+              raise SystemExit(f"Không tìm thấy {settings_path}")
+
           if not wrapper_path.is_file():
-              raise SystemExit(f"Không tìm thấy: {wrapper_path}")
+              raise SystemExit(f"Không tìm thấy {wrapper_path}")
 
           settings = settings_path.read_text(encoding="utf-8")
 
           old_agp = 'id("com.android.application") version "8.12.1" apply false'
           new_agp = 'id("com.android.application") version "8.11.1" apply false'
+
           old_kotlin = 'id("org.jetbrains.kotlin.android") version "2.2.0" apply false'
           new_kotlin = 'id("org.jetbrains.kotlin.android") version "2.2.20" apply false'
 
           if settings.count(old_agp) != 1:
-              raise SystemExit("Không tìm thấy đúng khai báo AGP 8.12.1.")
+              raise SystemExit(
+                  "Không tìm thấy đúng khai báo AGP 8.12.1 trong settings.gradle.kts."
+              )
+
           if settings.count(old_kotlin) != 1:
-              raise SystemExit("Không tìm thấy đúng khai báo Kotlin 2.2.0.")
+              raise SystemExit(
+                  "Không tìm thấy đúng khai báo Kotlin 2.2.0 trong settings.gradle.kts."
+              )
 
           settings = settings.replace(old_agp, new_agp, 1)
           settings = settings.replace(old_kotlin, new_kotlin, 1)
+
           settings_path.write_text(settings, encoding="utf-8")
 
           lines = wrapper_path.read_text(encoding="utf-8").splitlines()
+
           indexes = [
               i for i, line in enumerate(lines)
               if line.strip().startswith("distributionUrl=")
           ]
 
           if len(indexes) != 1:
-              raise SystemExit("Không tìm thấy đúng một dòng distributionUrl.")
+              raise SystemExit(
+                  f"Cần đúng một dòng distributionUrl, tìm thấy {len(indexes)}."
+              )
 
           lines[indexes[0]] = (
               r"distributionUrl=https\://services.gradle.org/"
               r"distributions/gradle-8.14-all.zip"
           )
-          wrapper_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-          print("AGP 8.11.1 / Kotlin 2.2.20 / Gradle 8.14")
+          wrapper_path.write_text(
+              "\n".join(lines) + "\n",
+              encoding="utf-8"
+          )
+
+          print("Đã thiết lập AGP 8.11.1")
+          print("Đã thiết lập Kotlin 2.2.20")
+          print("Đã thiết lập Gradle 8.14")
           PY
 
-      - name: Verify toolchain versions
+      - name: Verify Flutter and Gradle versions
         shell: bash
         run: |
           set -euo pipefail
 
+          echo "===== FLUTTER VERSION ====="
           flutter --version
           flutter --version | grep -Fq 'Flutter 3.41.9'
 
-          grep -E 'com.android.application|org.jetbrains.kotlin.android' \
+          echo "===== ANDROID PLUGINS ====="
+          grep -E \
+            'com.android.application|org.jetbrains.kotlin.android' \
             "$PROJECT_DIR/android/settings.gradle.kts"
 
+          echo "===== GRADLE WRAPPER ====="
           grep 'distributionUrl' \
             "$PROJECT_DIR/android/gradle/wrapper/gradle-wrapper.properties"
 
           cd "$PROJECT_DIR/android"
+
           chmod +x gradlew
           ./gradlew --version | tee "$RUNNER_TEMP/gradle-version.txt"
+
           grep -Fq 'Gradle 8.14' "$RUNNER_TEMP/gradle-version.txt"
+
+          echo "===== TOOLCHAIN VERIFIED ====="
 
       - name: Install Flutter dependencies
         shell: bash
@@ -163,16 +196,22 @@ jobs:
           set -euo pipefail
           cd "$PROJECT_DIR"
 
+          echo "===== BUILD OUR DAYS V4.8 ====="
+
           flutter build apk --release
 
           APK="$PROJECT_DIR/build/app/outputs/flutter-apk/app-release.apk"
+
           if [[ ! -f "$APK" ]]; then
-            echo "::error::Không tìm thấy app-release.apk."
+            echo "::error::Không tìm thấy app-release.apk sau khi build."
             exit 1
           fi
 
           cp "$APK" "$GITHUB_WORKSPACE/Our-Days-V4.8.apk"
+
           ls -lh "$GITHUB_WORKSPACE/Our-Days-V4.8.apk"
+
+          echo "===== APK BUILD COMPLETED ====="
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v7
@@ -181,4 +220,3 @@ jobs:
           path: Our-Days-V4.8.apk
           if-no-files-found: error
           retention-days: 30
-          
