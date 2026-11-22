@@ -4,14 +4,20 @@ name: Build Our Days APK
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
+    name: Build Android APK
     runs-on: ubuntu-latest
 
     steps:
+      # 1. Lấy mã nguồn từ repository
       - name: Checkout source
         uses: actions/checkout@v7
 
+      # 2. Tìm và giải nén ZIP
       - name: Extract and check ZIP
         shell: bash
         run: |
@@ -20,9 +26,11 @@ jobs:
           ZIP="$(find . -type f -name 'our-days-native-v4.8-phone-build.zip' -print -quit)"
 
           if [[ -z "$ZIP" ]]; then
-            echo "::error::Không tìm thấy file ZIP."
+            echo "::error::Không tìm thấy our-days-native-v4.8-phone-build.zip"
             exit 1
           fi
+
+          echo "Đã tìm thấy: $ZIP"
 
           mkdir -p extracted
           unzip -q "$ZIP" -d extracted
@@ -30,70 +38,133 @@ jobs:
           PUBSPEC="$(find extracted -type f -name pubspec.yaml -print -quit)"
 
           if [[ -z "$PUBSPEC" ]]; then
-            echo "::error::ZIP không có pubspec.yaml."
+            echo "::error::ZIP không có pubspec.yaml. Không tìm thấy dự án Flutter."
             exit 1
           fi
 
           PROJECT_DIR="${PUBSPEC%/pubspec.yaml}"
 
           if [[ ! -f "$PROJECT_DIR/lib/main.dart" ]]; then
-            echo "::error::Thiếu lib/main.dart."
+            echo "::error::Thiếu lib/main.dart"
             exit 1
           fi
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Dự án Flutter: $PROJECT_DIR"
 
+      # 3. Cài Java 17
       - name: Set up Java
         uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
 
+      # 4. Cài Flutter Stable
       - name: Set up Flutter
-        uses: subosito/flutter-action@v2
+        uses: subosito/flutter-action@v2.23.0
         with:
           channel: stable
           cache: true
 
+      # 5. Kiểm tra và chuẩn bị Android
       - name: Prepare Android
         shell: bash
         run: |
-          if [[ ! -d "$PROJECT_DIR/android" ]]; then
-            cd "$PROJECT_DIR"
+          set -euo pipefail
+
+          cd "$PROJECT_DIR"
+
+          if [[ ! -d android ]]; then
             flutter create --platforms=android .
           fi
 
-      - name: Upgrade Gradle
+          if [[ ! -f android/gradle/wrapper/gradle-wrapper.properties ]]; then
+            echo "::error::Không tìm thấy Gradle wrapper."
+            exit 1
+          fi
+
+      # 6. Nâng Gradle lên 9.3.1 và kiểm tra thực tế
+      - name: Upgrade and verify Gradle
         shell: bash
         run: |
           set -euo pipefail
 
           WRAPPER="$PROJECT_DIR/android/gradle/wrapper/gradle-wrapper.properties"
 
-          if [[ ! -f "$WRAPPER" ]]; then
-            echo "::error::Không tìm thấy gradle-wrapper.properties"
+          python3 - "$WRAPPER" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          lines = path.read_text(encoding="utf-8").splitlines()
+
+          found = False
+
+          for i, line in enumerate(lines):
+              if line.strip().startswith("distributionUrl="):
+                  lines[i] = (
+                      "distributionUrl=https\\://services.gradle.org/"
+                      "distributions/gradle-9.3.1-bin.zip"
+                  )
+                  found = True
+                  break
+
+          if not found:
+              raise SystemExit("Không tìm thấy distributionUrl trong Gradle wrapper.")
+
+          path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          print("Đã cập nhật Gradle wrapper lên 9.3.1.")
+          PY
+
+          cd "$PROJECT_DIR/android"
+
+          chmod +x gradlew
+
+          echo "===== GRADLE WRAPPER CONFIGURATION ====="
+          grep "distributionUrl" gradle/wrapper/gradle-wrapper.properties
+
+          echo "===== ACTUAL GRADLE VERSION ====="
+          ./gradlew --version
+
+          ./gradlew --version | grep -q "Gradle 9.3.1" || {
+            echo "::error::Gradle không chạy đúng phiên bản 9.3.1."
             exit 1
-          fi
+          }
 
-          sed -i -E \
-            's/(gradle-)[0-9][^/]*(-all|-bin)\.zip/\19.3.1\2.zip/' \
-            "$WRAPPER"
-
-          echo "Gradle wrapper sau khi cập nhật:"
-          grep "distributionUrl" "$WRAPPER"
-
+      # 7. Cài thư viện Flutter
       - name: Install dependencies
+        shell: bash
         run: |
+          set -euo pipefail
           cd "$PROJECT_DIR"
           flutter pub get
 
+      # 8. Biên dịch APK
       - name: Build APK
+        shell: bash
         run: |
-          cd "$PROJECT_DIR"
-          flutter build apk --release
-          cp build/app/outputs/flutter-apk/app-release.apk \
-            "$GITHUB_WORKSPACE/Our-Days-V4.8.apk"
+          set -euo pipefail
 
+          cd "$PROJECT_DIR"
+
+          echo "===== FLUTTER VERSION ====="
+          flutter --version
+
+          echo "===== BUILD RELEASE APK ====="
+          flutter build apk --release
+
+          APK="build/app/outputs/flutter-apk/app-release.apk"
+
+          if [[ ! -f "$APK" ]]; then
+            echo "::error::Không tìm thấy APK sau khi Build."
+            exit 1
+          fi
+
+          cp "$APK" "$GITHUB_WORKSPACE/Our-Days-V4.8.apk"
+
+          echo "Build APK thành công."
+
+      # 9. Xuất APK để tải về
       - name: Upload APK
         uses: actions/upload-artifact@v6
         with:
