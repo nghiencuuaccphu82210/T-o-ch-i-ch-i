@@ -1,0 +1,84 @@
+
+name: Build Our Days APK
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+
+      - name: Extract and check ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ZIP="$(find . -type f -name 'our-days-native-v4.8-phone-build.zip' -print -quit)"
+
+          if [[ -z "$ZIP" ]]; then
+            echo "::error::Không tìm thấy file ZIP."
+            exit 1
+          fi
+
+          mkdir -p extracted
+          unzip -q "$ZIP" -d extracted
+
+          PUBSPEC="$(find extracted -type f -name pubspec.yaml -print -quit)"
+
+          if [[ -z "$PUBSPEC" ]]; then
+            echo "::error::ZIP không có pubspec.yaml. Không tìm thấy dự án Flutter."
+            exit 1
+          fi
+
+          PROJECT_DIR="${PUBSPEC%/pubspec.yaml}"
+
+          if [[ ! -f "$PROJECT_DIR/lib/main.dart" ]]; then
+            echo "::error::Thiếu lib/main.dart."
+            exit 1
+          fi
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Prepare Android
+        shell: bash
+        run: |
+          if [[ ! -d "$PROJECT_DIR/android" ]]; then
+            cd "$PROJECT_DIR"
+            flutter create --platforms=android .
+          fi
+
+      - name: Install dependencies
+        run: |
+          cd "$PROJECT_DIR"
+          flutter pub get
+
+      - name: Build APK
+        run: |
+          cd "$PROJECT_DIR"
+          flutter build apk --release
+          cp build/app/outputs/flutter-apk/app-release.apk \
+            "$GITHUB_WORKSPACE/Our-Days-V4.8.apk"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Our-Days-V4.8-APK
+          path: Our-Days-V4.8.apk
+          if-no-files-found: error
+          retention-days: 7
