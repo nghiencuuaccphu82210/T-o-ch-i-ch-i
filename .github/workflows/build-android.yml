@@ -10,7 +10,7 @@ jobs:
 
     steps:
       - name: Checkout source
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Extract and check ZIP
         shell: bash
@@ -30,7 +30,7 @@ jobs:
           PUBSPEC="$(find extracted -type f -name pubspec.yaml -print -quit)"
 
           if [[ -z "$PUBSPEC" ]]; then
-            echo "::error::ZIP không có pubspec.yaml. Không tìm thấy dự án Flutter."
+            echo "::error::ZIP không có pubspec.yaml."
             exit 1
           fi
 
@@ -76,10 +76,9 @@ jobs:
             "$GITHUB_WORKSPACE/Our-Days-V4.8.apk"
 
       - name: Upload APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: Our-Days-V4.8-APK
           path: Our-Days-V4.8.apk
           if-no-files-found: error
           retention-days: 7
-          
